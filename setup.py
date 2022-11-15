@@ -12,8 +12,8 @@ setup(
 	author_email='iburger@victronenergy.com',
 	url='https://github.com/victronenergy/aiovelib',
 	license='MIT',
-	py_modules = ["aiovelib"],
+	packages = ["aiovelib"],
 	install_requires=[
-	'dbussy',
+		'dbus-next',
 	],
 )
