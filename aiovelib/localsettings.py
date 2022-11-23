@@ -9,7 +9,7 @@ class SettingException(DbusException):
 	pass
 
 class Setting(dict):
-	def __init__(self, path, default, _min=None, _max=None, silent=False):
+	def __init__(self, path, default, _min=None, _max=None, silent=False, alias=None):
 		super().__init__(path=make_variant(path), default=make_variant(default))
 		if _min is not None:
 			self["min"] = make_variant(_min)
@@ -17,16 +17,24 @@ class Setting(dict):
 			self["max"] = make_variant(_max)
 		if silent:
 			self["silent"] = make_variant(1)
+		self.alias = alias
 
 class SettingsService(Service):
 	servicetype = SETTINGS_SERVICE
 	paths = set() # Empty set
+	aliases = {}
 
 	async def add_settings(self, *settings):
+		# Update the alaises
+		self.aliases.update((s.alias, s["path"].value) for s in settings)
+
+		# add settings
 		reply = await self.monitor.dbus_call(SETTINGS_SERVICE, "/",
 			"AddSettings", "aa{sv}", list(settings),
 			interface=SETTINGS_INTERFACE)
 
+		# process results, store current values. This avoids an additional
+		# call to GetValue.
 		for result in reply[0]:
 			path = result["path"].value
 			if result["error"].value == 0:
@@ -35,16 +43,19 @@ class SettingsService(Service):
 			else:
 				raise SettingException(path)
 
+	def alias(self, a):
+		return self.aliases.get(a)
+
 if __name__ == "__main__":
 	import asyncio
 	from dbus_next.aio import MessageBus
 	from dbus_next.constants import BusType
 
 	class MyMonitor(Monitor):
-		def itemsChanged(self, name, values):
+		def itemsChanged(self, service, values):
 			""" Callback """
 			for p, v in values.items():
-				print (f"{name}{p} changed to {v}")
+				print (f"{service.name}{p} changed to {v}")
 
 	class MySettingsService(SettingsService, ServiceHandler):
 		pass
