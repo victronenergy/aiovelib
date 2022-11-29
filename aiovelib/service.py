@@ -1,6 +1,6 @@
 import asyncio
 from dbus_next.service import ServiceInterface, method, signal
-from dbus_next import Variant
+from dbus_next import Variant, Message, MessageFlag, MessageType
 
 IFACE="com.victronenergy.BusItem"
 
@@ -57,7 +57,7 @@ class Item(ServiceInterface):
 
 		if change is not None:
 			# Send ItemsChanged
-			self.service.interface.ItemsChanged({
+			self.service.send_items_changed({
 				self.path: change
 			})
 		return 0
@@ -102,6 +102,8 @@ class RootItemInterface(ServiceInterface):
 
 	@signal()
 	def ItemsChanged(self, changes) -> 'a{sa{sv}}':
+		""" This is here for introspection. We don't use it because dbus-next
+		    does not allow us to set the NO_REPLY_EXPECTED flag. """
 		return changes
 
 	@method()
@@ -127,8 +129,7 @@ class ItemChangeCollector(object):
 			self.changes[path] = change
 
 	def flush(self):
-		self.service.interface.ItemsChanged({
-			p: c for p, c in self.changes.items() })
+		self.service.send_items_changed(self.changes)
 
 class Service(object):
 	@classmethod
@@ -168,6 +169,18 @@ class Service(object):
 		self.bus.export(item.path, item)
 		self.objects[item.path] = item
 		item.service = self
+
+	def send_items_changed(self, changes):
+		# Send the signal ourselves, so we can set NO_REPLY_EXPECTED.
+		msg = Message(
+			message_type=MessageType.SIGNAL,
+			interface=IFACE,
+			path="/",
+			flags=MessageFlag.NO_REPLY_EXPECTED,
+			member="ItemsChanged",
+			signature="a{sa{sv}}",
+			body=[changes])
+		self.bus.send(msg)
 
 if __name__ == "__main__":
 	from dbus_next.aio import MessageBus
