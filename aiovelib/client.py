@@ -134,8 +134,8 @@ class Monitor(object):
 
 	def __init__(self, bus, itemsChanged=None):
 		self.bus = bus
-		self.services = {}
-		self.servicesByName = {}
+		self._services = {}
+		self._servicesByName = {}
 		self._itemsChanged = itemsChanged
 
 	def itemsChanged(self, service, values):
@@ -208,7 +208,7 @@ class Monitor(object):
 			return self.name_owner_changed(*msg.body)
 		elif msg.member == "ItemsChanged":
 			try:
-				service = self.services[msg.sender]
+				service = self._services[msg.sender]
 			except KeyError:
 				pass # no such service
 			else:
@@ -217,7 +217,7 @@ class Monitor(object):
 					self.itemsChanged(service, updated)
 		elif msg.member == "PropertiesChanged":
 			try:
-				service = self.services[msg.sender]
+				service = self._services[msg.sender]
 			except KeyError:
 				pass # no such service
 			else:
@@ -238,15 +238,15 @@ class Monitor(object):
 		""" Returns a Service object if this is a service we know how
 		    to handle. Otherwise None. """
 		try:
-			self.services[owner] = service = Service.handlers[servicetype(name)](
+			self._services[owner] = service = Service.handlers[servicetype(name)](
 				self, name, owner)
 		except KeyError:
 			return None
 
 		try:
-			self.servicesByName[name].set_result(service)
+			self._servicesByName[name].set_result(service)
 		except KeyError:
-			self.servicesByName[name] = f = asyncio.Future()
+			self._servicesByName[name] = f = asyncio.Future()
 			f.set_result(service)
 
 		# Watch updates on this service only
@@ -264,7 +264,7 @@ class Monitor(object):
 		return service
 
 	async def remove_service(self, name, owner):
-		if owner in self.services:
+		if owner in self._services:
 			# Remove watches. These need to match the calls in add_service
 			await self.remove_match(interface="com.victronenergy.BusItem",
 				sender=name,
@@ -276,8 +276,8 @@ class Monitor(object):
 				type="signal",
 				member="PropertiesChanged")
 
-			del self.services[owner]
-			del self.servicesByName[name]
+			del self._services[owner]
+			del self._servicesByName[name]
 
 	async def dbus_call(self, name, path, member, signature, *params, interface=IFACE):
 		reply = await self.bus.call(Message(
@@ -304,16 +304,20 @@ class Monitor(object):
 		else:
 			service.update_items(reply[0])
 
+	@property
+	def services(self):
+		return iter(self._services.values())
+
 	def get_service(self, name):
 		try:
-			return self.servicesByName[name].result()
+			return self._servicesByName[name].result()
 		except (KeyError, asyncio.InvalidStateError):
 			pass
 		return None
 
 	def get_value(self, name, path, default=None):
 		try:
-			return self.servicesByName[name].result().values[path].value
+			return self._servicesByName[name].result().values[path].value
 		except (KeyError, asyncio.InvalidStateError):
 			pass
 		return default
@@ -321,7 +325,7 @@ class Monitor(object):
 	def set_value_async(self, name, path, value):
 		""" Similar naming to old velib method for fire and forget setting. """
 		try:
-			if not path in self.servicesByName[name].result().values:
+			if not path in self._servicesByName[name].result().values:
 				return -1
 		except (KeyError, asyncio.InvalidStateError):
 			return -1 # name not in services
@@ -342,9 +346,9 @@ class Monitor(object):
 		""" Returns Service object if already known, otherwise
 		    await it. """
 		try:
-			return await self.servicesByName[name]
+			return await self._servicesByName[name]
 		except KeyError:
-			self.servicesByName[name] = f = asyncio.Future()
+			self._servicesByName[name] = f = asyncio.Future()
 			return await f
 
 if __name__ == "__main__":
