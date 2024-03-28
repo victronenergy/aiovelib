@@ -17,12 +17,12 @@ from aiovelib.service import Service, IntegerItem, DoubleItem, TextItem
 
 async def main():
 	bus = await MessageBus(bus_type=BusType.SESSION).connect()
-	service = await Service.create(bus, 'com.victronenergy.grid.example')
-
+	service = Service(bus, 'com.victronenergy.grid.example')
 	service.add_item(IntegerItem('/Int', 1, writeable=True))
 	service.add_item(DoubleItem('/Double', 2.0, writeable=True))
 	service.add_item(TextItem('/Text', 'This is text', writeable=True))
 
+	await service.register()
 	await bus.wait_for_disconnect()
 
 asyncio.get_event_loop().run_until_complete(main())

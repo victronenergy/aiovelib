@@ -132,19 +132,16 @@ class ItemChangeCollector(object):
 		self.service.send_items_changed(self.changes)
 
 class Service(object):
-	@classmethod
-	async def create(cls, bus, name):
-		self = cls(bus, name)
-		self.interface = RootItemInterface(self)
-		bus.export('/', self.interface)
-		await bus.request_name(name)
-		return self
-
 	def __init__(self, bus, name):
 		self.bus = bus
 		self.name = name
 		self.objects = {}
 		self.changecollectors = []
+		self.interface = RootItemInterface(self)
+		bus.export('/', self.interface)
+
+	async def register(self):
+		await self.bus.request_name(self.name)
 
 	def __enter__(self):
 		l = ItemChangeCollector(self)
@@ -188,7 +185,8 @@ if __name__ == "__main__":
 
 	async def main():
 		bus = await MessageBus(bus_type=BusType.SESSION).connect()
-		service = await Service.create(bus, 'com.victronenergy.grid.example')
+		service = Service(bus, 'com.victronenergy.grid.example')
+		await service.register()
 
 		def check_int(v):
 			if 0 < v < 100:
