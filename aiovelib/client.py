@@ -144,6 +144,14 @@ class Monitor(object):
 		if self._itemsChanged is not None:
 			return self._itemsChanged(service, values)
 
+	async def serviceAdded(self, service):
+		""" Default method, called when service is added. """
+		pass
+
+	async def serviceRemoved(self, service):
+		""" called when service is removed. """
+		pass
+
 	async def add_match(self, **kwargs):
 		await self.bus.call(
 			Message(
@@ -276,8 +284,10 @@ class Monitor(object):
 				type="signal",
 				member="PropertiesChanged")
 
+			service = self._services[owner]
 			del self._services[owner]
 			del self._servicesByName[name]
+			await self.serviceRemoved(service)
 
 	async def dbus_call(self, name, path, member, signature, *params, interface=IFACE):
 		reply = await self.bus.call(Message(
@@ -303,6 +313,7 @@ class Monitor(object):
 			log.exception("scan_service")
 		else:
 			service.update_items(reply[0])
+			await self.serviceAdded(service)
 
 	@property
 	def services(self):
