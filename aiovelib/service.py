@@ -167,6 +167,9 @@ class Service(object):
 		self.objects[item.path] = item
 		item.service = self
 
+	def get_item(self, path):
+		return self.objects.get(path, None)
+
 	def send_items_changed(self, changes):
 		# Send the signal ourselves, so we can set NO_REPLY_EXPECTED.
 		msg = Message(
