@@ -317,7 +317,7 @@ class Monitor(object):
 
 	@property
 	def services(self):
-		return iter(self._services.values())
+		return iter(s.result() for s in self._servicesByName.values() if s.done())
 
 	def get_service(self, name):
 		try:
