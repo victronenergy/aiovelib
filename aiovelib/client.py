@@ -117,8 +117,8 @@ class ServiceHandler(object):
 class Monitor(object):
 	""" Monitors for service changes. """
 	@classmethod
-	async def create(cls, bus, *args):
-		m = cls(bus, *args)
+	async def create(cls, bus, *args, **kwargs):
+		m = cls(bus, *args, **kwargs)
 
 		bus.add_message_handler(m.handle_message)
 
@@ -132,11 +132,12 @@ class Monitor(object):
 
 		return m
 
-	def __init__(self, bus, itemsChanged=None):
+	def __init__(self, bus, itemsChanged=None, handlers=None):
 		self.bus = bus
 		self._services = {}
 		self._servicesByName = {}
 		self._itemsChanged = itemsChanged
+		self._handlers = Service.handlers if handlers is None else handlers
 
 	def itemsChanged(self, service, values):
 		""" Default calls whatever was passed to the constructor, but
@@ -246,7 +247,7 @@ class Monitor(object):
 		""" Returns a Service object if this is a service we know how
 		    to handle. Otherwise None. """
 		try:
-			self._services[owner] = service = Service.handlers[servicetype(name)](
+			self._services[owner] = service = self._handlers[servicetype(name)](
 				self, name, owner)
 		except KeyError:
 			return None
