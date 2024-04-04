@@ -38,7 +38,7 @@ class Item(object):
 		self.value = None
 
 	def update(self, value):
-		self.value = value
+		self.value = None if value == [] else value
 
 class Service(object):
 	""" Encapsulates a watched service. Set paths to the paths that should be
