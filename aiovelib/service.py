@@ -124,7 +124,8 @@ class ItemChangeCollector(object):
 		self.changes = {}
 
 	def __setitem__(self, path, value):
-		change = self.service.objects[path]._set_value(value)
+		ob = self.service.objects[path]
+		change = ob._set_value(None if value is None else ob.valuetype(value))
 		if change is not None:
 			self.changes[path] = change
 
