@@ -67,10 +67,13 @@ class Item(ServiceInterface):
 			return None
 
 		if self.onchange is None or self.onchange(v):
-			self.value = v
-			return {'Value': self.get_value(), 'Text': Variant('s', self.get_text()) }
+			return self._set_local_value(v)
 
 		raise ValueError(v)
+
+	def _set_local_value(self, v):
+		self.value = v
+		return {'Value': self.get_value(), 'Text': Variant('s', self.get_text()) }
 
 class IntegerItem(Item):
 	coding = 'i'
@@ -125,7 +128,7 @@ class ItemChangeCollector(object):
 
 	def __setitem__(self, path, value):
 		ob = self.service.objects[path]
-		change = ob._set_value(None if value is None else ob.valuetype(value))
+		change = ob._set_local_value(None if value is None else ob.valuetype(value))
 		if change is not None:
 			self.changes[path] = change
 
