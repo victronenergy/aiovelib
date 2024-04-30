@@ -171,6 +171,10 @@ class Service(object):
 		self.objects[item.path] = item
 		item.service = self
 
+	def remove_item(self, path):
+		del self.objects[path]
+		self.bus.unexport(path)
+
 	def get_item(self, path):
 		return self.objects.get(path, None)
 
