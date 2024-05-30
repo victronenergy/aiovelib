@@ -1,4 +1,5 @@
 import asyncio
+from inspect import iscoroutinefunction
 from dbus_next.service import ServiceInterface, method, signal
 from dbus_next import Variant, Message, MessageFlag, MessageType
 
@@ -11,6 +12,7 @@ class Item(ServiceInterface):
 		self.value = value
 		self.writeable = writeable
 		self.onchange = onchange
+		self._onchange_is_awaitable = iscoroutinefunction(onchange)
 		self.text = text
 		self.service = None
 
@@ -66,7 +68,12 @@ class Item(ServiceInterface):
 		if v == self.value:
 			return None
 
-		if self.onchange is None or self.onchange(v):
+		if self.onchange is None:
+			return self._set_local_value(v)
+		elif self._onchange_is_awaitable:
+			# onchange is responsible for sending its own ItemsChanged
+			asyncio.get_event_loop().create_task(self.onchange(self, v))
+		elif self.onchange(v):
 			return self._set_local_value(v)
 
 		raise ValueError(v)
@@ -74,6 +81,15 @@ class Item(ServiceInterface):
 	def _set_local_value(self, v):
 		self.value = v
 		return {'Value': self.get_value(), 'Text': Variant('s', self.get_text()) }
+
+	def set_local_value(self, v):
+		""" Set a single local item value, and immediately send ItemsChanged.
+		    Shortcut for using a with statement to send just one item. """
+		change = self._set_local_value(v)
+		if change is not None:
+			self.service.send_items_changed({
+				self.path: change
+			})
 
 class IntegerItem(Item):
 	coding = 'i'
@@ -204,11 +220,18 @@ if __name__ == "__main__":
 				return True
 			return False
 
+		async def callback_async(item, v):
+			await asyncio.sleep(3)
+			item.set_local_value(v)
+
 		service.add_item(IntegerItem('/DeviceInstance', 0))
 		service.add_item(IntegerItem('/Int', 1, writeable=True, onchange=check_int))
 		service.add_item(DoubleItem('/Double', 2.0, writeable=True))
 		service.add_item(TextItem('/Text', 'This is text', writeable=True))
 		service.add_item(TextArrayItem('/Array', ['a', 'b']))
+
+		# Test async callback
+		service.add_item(IntegerItem('/AsyncItem', writeable=True, onchange=callback_async))
 
 		# emit the changed signal after two seconds.
 		await asyncio.sleep(3)
