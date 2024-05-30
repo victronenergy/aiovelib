@@ -101,8 +101,11 @@ class Service(object):
 		except AttributeError:
 			return None
 
-	def set_value(self, path, value):
+	def set_value_async(self, path, value):
 		return self.monitor.set_value_async(self.name, path, value)
+
+	async def set_value(self, path, value):
+		return await self.monitor.set_value(self.name, path, value)
 
 class ServiceHandler(object):
 	""" Keeps tracks of classes that handles services. Mix this into
