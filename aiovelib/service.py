@@ -73,6 +73,7 @@ class Item(ServiceInterface):
 		elif self._onchange_is_awaitable:
 			# onchange is responsible for sending its own ItemsChanged
 			asyncio.get_event_loop().create_task(self.onchange(self, v))
+			return None
 		elif self.onchange(v):
 			return self._set_local_value(v)
 
