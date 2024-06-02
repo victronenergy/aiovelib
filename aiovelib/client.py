@@ -36,9 +36,11 @@ class DbusException(Exception):
 class Item(object):
 	def __init__(self):
 		self.value = None
+		self.seen = False
 
 	def update(self, value):
 		self.value = None if value == [] else value
+		self.seen = True
 
 class Service(object):
 	""" Encapsulates a watched service. Set paths to the paths that should be
@@ -106,6 +108,13 @@ class Service(object):
 
 	async def set_value(self, path, value):
 		return await self.monitor.set_value(self.name, path, value)
+
+	def seen(self, path):
+		try:
+			return self.values.get(path).seen
+		except AttributeError:
+			pass
+		return False
 
 class ServiceHandler(object):
 	""" Keeps tracks of classes that handles services. Mix this into
@@ -332,8 +341,8 @@ class Monitor(object):
 
 	def get_value(self, name, path, default=None):
 		try:
-			return self._servicesByName[name].result().values[path].value
-		except (KeyError, asyncio.InvalidStateError):
+			return self._servicesByName[name].result().get_value(path)
+		except (KeyError, AttributeError, asyncio.InvalidStateError):
 			pass
 		return default
 
@@ -347,6 +356,13 @@ class Monitor(object):
 
 		asyncio.get_event_loop().create_task(
 			self.set_value(name, path, value))
+
+	def seen(self, name, path):
+		try:
+			return self._servicesByName[name].result().seen(path)
+		except (KeyError, AttributeError, asyncio.InvalidStateError):
+			pass
+		return False
 
 	async def set_value(self, name, path, value):
 		try:
@@ -391,6 +407,9 @@ if __name__ == "__main__":
 		monitor.set_value_async("com.victronenergy.grid.example", "/Double", 55.1)
 		monitor.set_value_async("com.victronenergy.grid.example", "/Int", 44)
 		monitor.set_value_async("com.victronenergy.grid.example", "/Text", "Modified by me!")
+
+		print ("/Nothing seen:", monitor.seen("com.victronenergy.grid.example", "/Nothing"))
+		print ("/Double seen:", monitor.seen("com.victronenergy.grid.example", "/Double"))
 
 		await bus.wait_for_disconnect()
 
