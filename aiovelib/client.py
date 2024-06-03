@@ -48,13 +48,14 @@ class Service(object):
 
 	handlers = {}
 	paths = None # match all paths
+	make_item = Item # So it can be overriden by subclasses
 
 	def __init__(self, monitor, name, owner):
 		self.monitor = monitor
 		self.name = name
 		self.owner = owner
 		self.matches = []
-		self.values = defaultdict(Item)
+		self.values = defaultdict(self.make_item)
 
 	@classmethod
 	def add_handler(cls, service, handler):
