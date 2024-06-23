@@ -275,7 +275,11 @@ class Monitor(object):
 			sender=name,
 			type="signal",
 			member="PropertiesChanged")
-		await self.scan_service(service)
+
+		# Scan service, if it fails, remove the matches and give up
+		if not await self.scan_service(service):
+			await self._remove_matches(name)
+			return None
 
 		try:
 			# If this succeeds, someone was waiting for it
@@ -284,20 +288,26 @@ class Monitor(object):
 			self._servicesByName[name] = f = asyncio.Future()
 			f.set_result(service)
 
+		await self.serviceAdded(service)
 		return service
 
-	async def remove_service(self, name, owner):
-		if owner in self._services:
-			# Remove watches. These need to match the calls in add_service
-			await self.remove_match(interface="com.victronenergy.BusItem",
+	async def _remove_matches(self, name):
+		# Remove watches. These need to match the calls in add_service
+		await asyncio.gather(
+			self.remove_match(interface="com.victronenergy.BusItem",
 				sender=name,
 				path="/",
 				type="signal",
-				member="ItemsChanged")
-			await self.remove_match(interface="com.victronenergy.BusItem",
+				member="ItemsChanged"),
+			self.remove_match(interface="com.victronenergy.BusItem",
 				sender=name,
 				type="signal",
 				member="PropertiesChanged")
+		)
+
+	async def remove_service(self, name, owner):
+		if owner in self._services:
+			await self._remove_matches(name)
 
 			service = self._services[owner]
 			del self._services[owner]
@@ -326,9 +336,10 @@ class Monitor(object):
 			reply = await self.dbus_call(service.name, "/", "GetItems", "")
 		except DbusException:
 			log.exception("scan_service")
+			return False
 		else:
 			service.update_items(reply[0])
-			await self.serviceAdded(service)
+			return True
 
 	@property
 	def services(self):
