@@ -265,12 +265,6 @@ class Monitor(object):
 		except KeyError:
 			return None
 
-		try:
-			self._servicesByName[name].set_result(service)
-		except KeyError:
-			self._servicesByName[name] = f = asyncio.Future()
-			f.set_result(service)
-
 		# Watch updates on this service only
 		await self.add_match(interface="com.victronenergy.BusItem",
 			sender=name,
@@ -282,6 +276,13 @@ class Monitor(object):
 			type="signal",
 			member="PropertiesChanged")
 		await self.scan_service(service)
+
+		try:
+			# If this succeeds, someone was waiting for it
+			self._servicesByName[name].set_result(service)
+		except KeyError:
+			self._servicesByName[name] = f = asyncio.Future()
+			f.set_result(service)
 
 		return service
 
