@@ -266,15 +266,17 @@ class Monitor(object):
 			return None
 
 		# Watch updates on this service only
-		await self.add_match(interface="com.victronenergy.BusItem",
-			sender=name,
-			path="/",
-			type="signal",
-			member="ItemsChanged")
-		await self.add_match(interface="com.victronenergy.BusItem",
-			sender=name,
-			type="signal",
-			member="PropertiesChanged")
+		await asyncio.gather(
+			self.add_match(interface="com.victronenergy.BusItem",
+				sender=name,
+				path="/",
+				type="signal",
+				member="ItemsChanged"),
+			self.add_match(interface="com.victronenergy.BusItem",
+				sender=name,
+				type="signal",
+				member="PropertiesChanged")
+		)
 
 		# Scan service, if it fails, remove the matches and give up
 		if not await self.scan_service(service):
