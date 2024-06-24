@@ -259,6 +259,10 @@ class Monitor(object):
 	async def add_service(self, name, owner):
 		""" Returns a Service object if this is a service we know how
 		    to handle. Otherwise None. """
+		# If this service was already added by some other means, skip it
+		if owner in self._services:
+			return None
+
 		try:
 			self._services[owner] = service = self._handlers[servicetype(name)](
 				self, name, owner)
