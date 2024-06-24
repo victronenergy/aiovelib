@@ -42,6 +42,11 @@ class Item(object):
 		self.value = None if value == [] else value
 		self.seen = True
 
+	def update_unseen(self, value):
+		# update only if not seen yet. Used during scanning.
+		if not self.seen:
+			self.update(value)
+
 class Service(object):
 	""" Encapsulates a watched service. Set paths to the paths that should be
 	    tracked. """
@@ -76,6 +81,22 @@ class Service(object):
 			if self.paths is None or path in self.paths:
 				try:
 					self.values[path].update(v := attrs["Value"].value)
+				except KeyError:
+					pass # No Value on this change, okay...
+				else:
+					updated[path] = v
+
+		return updated
+
+	def update_unseen_items(self, items):
+		# This is identical to update_items, but only updates unseen items.
+		# The duplication is to keep update_items free from logic for this
+		# lesser-used method.
+		updated = {}
+		for path, attrs in items.items():
+			if self.paths is None or path in self.paths:
+				try:
+					self.values[path].update_unseen(v := attrs["Value"].value)
 				except KeyError:
 					pass # No Value on this change, okay...
 				else:
@@ -344,7 +365,10 @@ class Monitor(object):
 			log.exception("scan_service")
 			return False
 		else:
-			service.update_items(reply[0])
+			# Only update items that has not been seen yet, via an
+			# ItemsChanged/PropertiesChanged message. This avoids
+			# overwriting more recent values with an older scan.
+			service.update_unseen_items(reply[0])
 			return True
 
 	@property
