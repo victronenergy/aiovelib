@@ -1,7 +1,13 @@
 import asyncio
 from inspect import iscoroutinefunction
-from dbus_next.service import ServiceInterface, method, signal
-from dbus_next import Variant, Message, MessageFlag, MessageType
+try:
+	import dbus_fast
+except ImportError:
+	from dbus_next.service import ServiceInterface, method, signal
+	from dbus_next import Variant, Message, MessageFlag, MessageType
+else:
+	from dbus_fast.service import ServiceInterface, method, signal
+	from dbus_fast import Variant, Message, MessageFlag, MessageType
 
 IFACE="com.victronenergy.BusItem"
 
@@ -208,8 +214,12 @@ class Service(object):
 		self.bus.send(msg)
 
 if __name__ == "__main__":
-	from dbus_next.aio import MessageBus
-	from dbus_next.constants import BusType
+	try:
+		from dbus_fast.aio import MessageBus
+		from dbus_fast.constants import BusType
+	except ImportError:
+		from dbus_next.aio import MessageBus
+		from dbus_next.constants import BusType
 
 	async def main():
 		bus = await MessageBus(bus_type=BusType.SESSION).connect()

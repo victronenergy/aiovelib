@@ -48,8 +48,12 @@ class SettingsService(Service):
 
 if __name__ == "__main__":
 	import asyncio
-	from dbus_next.aio import MessageBus
-	from dbus_next.constants import BusType
+	try:
+		from dbus_fast.aio import MessageBus
+		from dbus_fast.constants import BusType
+	except ImportError:
+		from dbus_next.aio import MessageBus
+		from dbus_next.constants import BusType
 
 	class MyMonitor(Monitor):
 		def itemsChanged(self, service, values):

@@ -1,7 +1,11 @@
 import asyncio
 from collections import defaultdict
 import logging
-from dbus_next import Message, MessageType, Variant
+
+try:
+	from dbus_fast import Message, MessageType, Variant
+except ImportError:
+	from dbus_next import Message, MessageType, Variant
 
 log = logging.getLogger(__name__)
 
@@ -426,8 +430,12 @@ class Monitor(object):
 			return await f
 
 if __name__ == "__main__":
-	from dbus_next.aio import MessageBus
-	from dbus_next.constants import BusType
+	try:
+		from dbus_fast.aio import MessageBus
+		from dbus_fast.constants import BusType
+	except ImportError:
+		from dbus_next.aio import MessageBus
+		from dbus_next.constants import BusType
 
 	class MyMonitor(Monitor):
 		def itemsChanged(self, service, values):
