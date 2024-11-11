@@ -13,6 +13,7 @@ BUS_DAEMON_IFACE = "org.freedesktop.DBus"
 BUS_DAEMON_NAME = "org.freedesktop.DBus"
 BUS_DAEMON_PATH = "/org/freedesktop/DBus"
 IFACE = "com.victronenergy.BusItem"
+SIGNAL = MessageType.SIGNAL # for performance
 
 def servicetype(busname):
 	return ".".join(busname.split(".")[:3])
@@ -248,12 +249,10 @@ class Monitor(object):
 
 
 	def handle_message(self, msg):
-		if msg.message_type != MessageType.SIGNAL:
+		if msg.message_type != SIGNAL:
 			return False # only signals handled below
 
-		if msg.member == "NameOwnerChanged":
-			return self.name_owner_changed(*msg.body)
-		elif msg.member == "ItemsChanged":
+		if msg.member == "ItemsChanged":
 			try:
 				service = self._services[msg.sender]
 			except KeyError:
@@ -271,6 +270,8 @@ class Monitor(object):
 				updated = service.update_items({ msg.path: msg.body[0] })
 				if updated:
 					self.itemsChanged(service, updated)
+		elif msg.member == "NameOwnerChanged":
+			return self.name_owner_changed(*msg.body)
 
 	def name_owner_changed(self, name, old, new):
 		asyncio.get_event_loop().create_task(self._name_owner_changed(name, old, new))
