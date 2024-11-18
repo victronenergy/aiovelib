@@ -71,9 +71,6 @@ class Item(ServiceInterface):
 		return 0
 
 	def _set_value(self, v):
-		if v == self.value:
-			return None
-
 		if self.onchange is None:
 			return self._set_local_value(v)
 		elif self._onchange_is_awaitable:
@@ -86,6 +83,9 @@ class Item(ServiceInterface):
 		raise ValueError(v)
 
 	def _set_local_value(self, v):
+		if v == self.value:
+			return None
+
 		self.value = v
 		return {'Value': self.get_value(), 'Text': Variant('s', self.get_text()) }
 
@@ -156,7 +156,8 @@ class ItemChangeCollector(object):
 			self.changes[path] = change
 
 	def flush(self):
-		self.service.send_items_changed(self.changes)
+		if self.changes:
+			self.service.send_items_changed(self.changes)
 
 class Service(object):
 	def __init__(self, bus, name):
