@@ -124,6 +124,22 @@ class Service(object):
 
 		return None
 
+	async def fetch_min(self, path):
+		try:
+			reply = await self.monitor.dbus_call(self.name, path, "GetMin", "")
+		except DbusException:
+			log.exception("fetch_max")
+		else:
+			return reply[0].value
+
+	async def fetch_max(self, path):
+		try:
+			reply = await self.monitor.dbus_call(self.name, path, "GetMax", "")
+		except DbusException:
+			log.exception("fetch_max")
+		else:
+			return reply[0].value
+
 	def get_value(self, path):
 		try:
 			return self.values.get(path).value
