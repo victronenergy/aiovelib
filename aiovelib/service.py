@@ -71,6 +71,9 @@ class Item(ServiceInterface):
 		return 0
 
 	def _set_value(self, v):
+		if v == self.value:
+			return None
+
 		if self.onchange is None:
 			return self._set_local_value(v)
 		elif self._onchange_is_awaitable:
