@@ -6,7 +6,7 @@ else:
     from dbus_fast.service import method
 
 
-from service import Item
+from aiovelib.service import Item
 
 
 IFACE="com.victronenergy.VregLink"

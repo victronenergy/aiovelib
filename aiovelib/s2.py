@@ -10,7 +10,7 @@ except ImportError:
 else:
     from dbus_fast.service import method, signal
 
-from service import Item
+from aiovelib.service import Item
 
 
 logger = logging.getLogger(__name__)
