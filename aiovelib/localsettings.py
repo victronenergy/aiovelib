@@ -76,4 +76,4 @@ if __name__ == "__main__":
 
 		await bus.wait_for_disconnect()
 
-	asyncio.get_event_loop().run_until_complete(main())
+	asyncio.run(main())

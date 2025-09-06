@@ -1,8 +1,24 @@
 # aiovelib
 
 This is a library for implementing the [Victron d-bus protocol][1] with
-python's [asyncio][2] and [dbus-next][3], and to maybe replace the current 
+python's [asyncio][2] and [dbus-next][3], and to maybe replace the current
 [GLib implementation][4] over time or where it makes sense.
+
+### Asyncio usage note
+
+This library now uses `asyncio.get_running_loop()` instead of
+`asyncio.get_event_loop()`, which means:
+
+- A running event loop is required, call the library only from async code.
+- No implicit fallback loop. Calling APIs that schedule tasks from plain sync
+  code or other threads without a loop will raise RuntimeError.
+- Make sure to service gets closed properly, either by `await service.close()`
+  or by using an async context manager via `async with Service(...)`
+- Async callbacks supported. Callbacks like onchange may be async def; they
+  are scheduled on the active loop.
+
+If you really need to use the library from sync code, you must create and
+manage your own event loop explicitly.
 
 ## Components
 
@@ -25,7 +41,7 @@ async def main():
 	await service.register()
 	await bus.wait_for_disconnect()
 
-asyncio.get_event_loop().run_until_complete(main())
+asyncio.run(main())
 
 ```
 
