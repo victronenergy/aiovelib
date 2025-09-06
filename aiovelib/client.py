@@ -290,7 +290,7 @@ class Monitor(object):
 			return self.name_owner_changed(*msg.body)
 
 	def name_owner_changed(self, name, old, new):
-		asyncio.get_event_loop().create_task(self._name_owner_changed(name, old, new))
+		asyncio.get_running_loop().create_task(self._name_owner_changed(name, old, new))
 
 	async def _name_owner_changed(self, name, old, new):
 		if old:
@@ -418,7 +418,7 @@ class Monitor(object):
 		except (KeyError, asyncio.InvalidStateError):
 			return -1 # name not in services
 
-		asyncio.get_event_loop().create_task(
+		asyncio.get_running_loop().create_task(
 			self.set_value(name, path, value))
 
 	def seen(self, name, path):
@@ -481,4 +481,4 @@ if __name__ == "__main__":
 
 		await bus.wait_for_disconnect()
 
-	asyncio.get_event_loop().run_until_complete(main())
+	asyncio.run(main())

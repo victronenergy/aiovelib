@@ -1,4 +1,5 @@
 import asyncio
+import warnings
 from inspect import iscoroutinefunction
 try:
 	import dbus_fast
@@ -78,7 +79,7 @@ class Item(ServiceInterface):
 			return self._set_local_value(v)
 		elif self._onchange_is_awaitable:
 			# onchange is responsible for sending its own ItemsChanged
-			asyncio.get_event_loop().create_task(self.onchange(self, v))
+			asyncio.get_running_loop().create_task(self.onchange(self, v))
 			return None
 		elif self.onchange(v):
 			return self._set_local_value(v)
@@ -163,6 +164,9 @@ class ItemChangeCollector(object):
 			self.service.send_items_changed(self.changes)
 
 class Service(object):
+
+	_closed = False
+
 	def __init__(self, bus, name):
 		self.bus = bus
 		self.name = name
@@ -173,6 +177,17 @@ class Service(object):
 
 	async def register(self):
 		await self.bus.request_name(self.name)
+
+	async def close(self):
+		if self._closed:
+			return
+		self._closed = True
+
+		while self.objects:
+			path, ob = self.objects.popitem()
+			self.bus.unexport(path)
+		self.bus.unexport("/")
+		await self.bus.release_name(self.name)
 
 	def __enter__(self):
 		l = ItemChangeCollector(self)
@@ -186,12 +201,21 @@ class Service(object):
 	def __getitem__(self, path):
 		return self.objects[path].value
 
+	# Async context manager
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb):
+		await self.close()
+
 	def __del__(self):
-		while self.objects:
-			path, ob = self.objects.popitem()
-			self.bus.unexport(path)
-		self.bus.unexport("/")
-		asyncio.get_event_loop().create_task(self.bus.release_name(self.name))
+		# Don't attempt async work here—loop may not exist.
+		if not self._closed:
+			warnings.warn(
+				"Service was garbage-collected without being closed. "
+				"Use 'async with Service(...)' or 'await service.close()'.",
+				ResourceWarning,
+			)
 
 	def add_item(self, item):
 		self.bus.export(item.path, item)
@@ -258,4 +282,4 @@ if __name__ == "__main__":
 
 		await bus.wait_for_disconnect()
 
-	asyncio.get_event_loop().run_until_complete(main())
+	asyncio.run(main())
