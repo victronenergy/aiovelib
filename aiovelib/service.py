@@ -118,6 +118,10 @@ class TextArrayItem(Item):
 	coding = 'as'
 	valuetype = list
 
+class DoubleArrayItem(Item):
+	coding = 'ad'
+	valuetype = list
+
 class RootItemInterface(ServiceInterface):
 	def __init__(self, service):
 		super().__init__(IFACE)
@@ -267,7 +271,8 @@ if __name__ == "__main__":
 		service.add_item(IntegerItem('/Int', 1, writeable=True, onchange=check_int))
 		service.add_item(DoubleItem('/Double', 2.0, writeable=True))
 		service.add_item(TextItem('/Text', 'This is text', writeable=True))
-		service.add_item(TextArrayItem('/Array', ['a', 'b']))
+		service.add_item(TextArrayItem('/Array', ['a', 'b'], writeable=True))
+		service.add_item(DoubleArrayItem('/DoubleArray', [1.0, 2.0], writeable=True))
 
 		# Test async callback
 		service.add_item(IntegerItem('/AsyncItem', writeable=True, onchange=callback_async))
@@ -279,6 +284,8 @@ if __name__ == "__main__":
 			s['/Int'] = 11
 			s['/Double'] = 22.0
 			s['/Text'] = 'This is not text'
+			s['/Array'] = ['c', 'd']
+			s['/DoubleArray'] = [3.0, 4.0]
 
 		await bus.wait_for_disconnect()
 

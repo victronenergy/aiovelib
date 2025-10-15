@@ -34,6 +34,9 @@ def make_variant(value):
 			return Variant("i", value)
 	if isinstance(value, str):
 		return Variant("s", value)
+	if isinstance(value, list):
+		if all (isinstance(v, int) | isinstance(v, float) for v in value):
+			return Variant("ad", value)
 
 class DbusException(Exception):
 	pass
