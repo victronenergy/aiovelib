@@ -66,6 +66,13 @@ class S2ServerItem(Item):
                 self._send_disconnect('KeepAlive missed')
                 await self._destroy_connection()
 
+    @method('Discover')
+    async def _on_discover(self) -> 'b':
+        """
+        Used by the CEM to check if the S2 interface is available on this path
+        """
+        return True
+
     @method('Connect')
     async def _on_connect(self, client_id: 's', keep_alive_interval: 'i') -> 'b':
         if not self.is_connected:
