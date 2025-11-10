@@ -35,8 +35,14 @@ def make_variant(value):
 	if isinstance(value, str):
 		return Variant("s", value)
 	if isinstance(value, list):
-		if all (isinstance(v, int) | isinstance(v, float) for v in value):
+		if len(value) == 0 or all(isinstance(v, int) for v in value):
+			return Variant("ai", value)
+		elif all(isinstance(v, (float, int)) for v in value):
 			return Variant("ad", value)
+		elif all(isinstance(v, str) for v in value):
+			return Variant("as", value)
+		else:
+			return Variant("ai", [])
 
 class DbusException(Exception):
 	pass

@@ -114,6 +114,10 @@ class TextItem(Item):
 	coding = 's'
 	valuetype = str
 
+class IntegerArrayItem(Item):
+	coding = 'ai'
+	valuetype = list
+
 class TextArrayItem(Item):
 	coding = 'as'
 	valuetype = list
