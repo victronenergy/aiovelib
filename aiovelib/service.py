@@ -1,5 +1,6 @@
 import asyncio
 import warnings
+import logging
 from inspect import iscoroutinefunction
 try:
 	import dbus_fast
@@ -11,6 +12,9 @@ else:
 	from dbus_fast import Variant, Message, MessageFlag, MessageType
 
 IFACE="com.victronenergy.BusItem"
+
+
+logger = logging.getLogger(__name__)
 
 class Item(ServiceInterface):
 	def __init__(self, path, value=None, writeable=False, onchange=None, text=None):
@@ -133,10 +137,14 @@ class RootItemInterface(ServiceInterface):
 
 	@method()
 	def GetItems(self) -> 'a{sa{sv}}':
-		return {
-			p: {'Value': v.get_value(), 'Text': Variant('s', v.get_text()) } \
-			for p, v in self.service.objects.items()
-		}
+		out = {}
+		for p, v in self.service.objects.items():
+			try:
+				out[p] = {'Value': v.get_value(), 'Text': Variant('s', v.get_text())}
+			except Exception as e:
+				logger.exception(f"GetItems failed on {p} with value {v.value}: {e}")
+				raise
+		return out
 
 	@signal()
 	def ItemsChanged(self, changes) -> 'a{sa{sv}}':
