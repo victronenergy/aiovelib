@@ -20,12 +20,16 @@ class Item(ServiceInterface):
 	def __init__(self, path, value=None, writeable=False, onchange=None, text=None):
 		super().__init__(IFACE)
 		self.path = path
-		self.value = value
 		self.writeable = writeable
 		self.onchange = onchange
 		self._onchange_is_awaitable = iscoroutinefunction(onchange)
 		self.text = text
 		self.service = None
+
+		if value and hasattr(self, 'valuetype'):
+			self.value = self.valuetype(value)
+		else:
+			self.value = value
 
 	def __str__(self):
 		if self.text:
