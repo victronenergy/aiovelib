@@ -13,7 +13,7 @@ except ImportError:
 else:
     from dbus_fast.service import method, signal
 
-from aiovelib.service import Item
+from aiovelib.service import TextItem
 
 
 logger = logging.getLogger(__name__)
@@ -23,9 +23,11 @@ IFACE="com.victronenergy.S2"
 
 
 class S2ConnEventType(int, Enum):
-    CONNECTED = 0
-    DISCONNECTED = 1
-    UNEXPECTED_RECONNECT = 2
+    NOT_READY = 0
+    READY = 1
+    CONNECTED = 2
+    DISCONNECTED = 3
+    UNEXPECTED_RECONNECT = 4
 
 
 @dataclass(frozen=True)
@@ -35,7 +37,7 @@ class S2ConnEvent:
     reason: Optional[str] = None
 
 
-class S2ServerItem(Item):
+class S2ServerItem(TextItem):
     def __init__(self, path):
         super().__init__(path)
         self.name = IFACE
@@ -51,8 +53,25 @@ class S2ServerItem(Item):
         self.last_seen = None
 
     @property
+    def is_ready(self):
+        return self.value is not None
+
+    @is_ready.setter
+    def is_ready(self, v: bool):
+        if v and self.value is not None:
+            return  # don't override an existing value
+        self.set_local_value("Ready" if v else None)
+        event_type = S2ConnEventType.READY if v else S2ConnEventType.NOT_READY
+        self._emit(S2ConnEvent(event_type, None))
+
+    @property
     def is_connected(self):
         return self.client_id is not None
+
+    async def set_ready(self, ready: bool = True):
+        if not ready and self.is_connected:
+            await self._destroy_connection("Not ready")
+        self.is_ready = ready
 
     def _emit(self, ev: S2ConnEvent) -> None:
         # non-blocking; queue is unbounded by default
@@ -87,6 +106,7 @@ class S2ServerItem(Item):
         self._keepalive_task = self._runningloop.create_task(self._monitor_keep_alive())
 
         self._emit(S2ConnEvent(S2ConnEventType.CONNECTED, client_id))
+        self.set_local_value(f"CEM: {client_id}")
 
     async def _destroy_connection(self, reason: str = "client disconnected"):
         if self._s2_dbus_disconnect_event:
@@ -109,6 +129,7 @@ class S2ServerItem(Item):
         self.last_seen = None
 
         self._emit(S2ConnEvent(S2ConnEventType.DISCONNECTED, old_client, reason))
+        self.set_local_value("Ready")
 
     async def _monitor_keep_alive(self):
         diff = self.keep_alive_interval + self.keep_alive_leeway
@@ -128,10 +149,13 @@ class S2ServerItem(Item):
         """
         Used by the CEM to check if the S2 interface is available on this path
         """
-        return True
+        return self.is_ready
 
     @method('Connect')
     async def _on_connect(self, client_id: 's', keep_alive_interval: 'i') -> 'b':
+        if not self.is_ready:
+            self._send_disconnect('Not ready', client_id)
+            return False
         if self.is_connected:
             if self.client_id == client_id:
                 self._emit(S2ConnEvent(S2ConnEventType.UNEXPECTED_RECONNECT, client_id))
@@ -143,6 +167,9 @@ class S2ServerItem(Item):
 
     @method('Disconnect')
     async def _on_disconnect(self, client_id: 's'):
+        if not self.is_ready:
+            self._send_disconnect('Not ready', client_id)
+            return
         if client_id != self.client_id:
             self._send_disconnect('Not connected', client_id)
             return
@@ -150,6 +177,9 @@ class S2ServerItem(Item):
 
     @method('Message')
     async def _on_message(self, client_id: 's', message: 's'):
+        if not self.is_ready:
+            self._send_disconnect('Not ready', client_id)
+            return
         if client_id != self.client_id:
             self._send_disconnect('Not connected', client_id)
             return
@@ -162,6 +192,9 @@ class S2ServerItem(Item):
 
     @method('KeepAlive')
     async def _on_keep_alive(self, client_id: 's') -> 'b':
+        if not self.is_ready:
+            self._send_disconnect('Not ready', client_id)
+            return False
         if client_id != self.client_id:
             self._send_disconnect('Not connected', client_id)
             return False
