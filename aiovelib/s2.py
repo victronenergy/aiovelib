@@ -600,7 +600,7 @@ class S2ResourceManagerItem(S2ServerItem):
 
         if reception_status.status != ReceptionStatusValues.OK and raise_on_error:
             raise RuntimeError(
-                f"ReceptionStatus was not OK but rather {reception_status.status}"
+                f"ReceptionStatus was not OK but rather {reception_status.status} ({reception_status.diagnostic_label})"
             )
 
         return reception_status
