@@ -618,6 +618,12 @@ class S2ResourceManagerItem(S2ServerItem):
             self._runningloop,
         ).result()
 
+    async def send_msg_and_forget(
+        self,
+        s2_msg: S2Message,
+    ) -> None:
+        await self._send_and_forget(s2_msg)
+
     async def _handle_received_messages(self) -> None:
         while True:
             msg = await self._received_messages.get()
