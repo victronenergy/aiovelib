@@ -6,7 +6,7 @@ import logging
 import asyncio
 from enum import Enum
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional, Dict, List, Awaitable
+from typing import AsyncIterator, Optional, Dict, List, Awaitable, Tuple
 
 try:
     import dbus_fast
@@ -237,20 +237,40 @@ class ReceptionStatusAwaiter:
     This fixes races and memory leaks compared to the original
     ReceptionStatusAwaiter provided in s2python v0.8.1.
     """
-    received: Dict[uuid.UUID, ReceptionStatus]
+    received: Dict[uuid.UUID, Tuple[ReceptionStatus, float]]
     awaiting: Dict[uuid.UUID, asyncio.Event]
 
-    def __init__(self) -> None:
+    def __init__(self, received_status_ttl_s: float = 30.0) -> None:
         self.received = {}
         self.awaiting = {}
+        self._received_status_ttl_s = max(0.0, float(received_status_ttl_s))
+
+    def reset(self) -> None:
+        self.received.clear()
+        self.awaiting.clear()
+
+    def _prune_expired_received(self) -> None:
+        if self._received_status_ttl_s <= 0:
+            return
+
+        now = time.monotonic()
+        expired = [
+            mid
+            for mid, (_, ts) in self.received.items()
+            if (now - ts) > self._received_status_ttl_s
+        ]
+
+        for mid in expired:
+            self.received.pop(mid, None)
 
     async def wait_for_reception_status(
         self, message_id: uuid.UUID, timeout_reception_status: float
     ) -> ReceptionStatus:
+        self._prune_expired_received()
 
         existing = self.received.pop(message_id, None)
         if existing is not None:
-            return existing
+            return existing[0]
 
         received_event = self.awaiting.get(message_id)
         if received_event is None:
@@ -259,7 +279,8 @@ class ReceptionStatusAwaiter:
 
         try:
             await asyncio.wait_for(received_event.wait(), timeout_reception_status)
-            return self.received.pop(message_id)
+            cached = self.received.pop(message_id)
+            return cached[0]
         finally:
             self.awaiting.pop(message_id, None)
 
@@ -269,6 +290,7 @@ class ReceptionStatusAwaiter:
                 f"Expected a ReceptionStatus but received message {reception_status}"
             )
 
+        self._prune_expired_received()
         mid = reception_status.subject_message_id
 
         if mid in self.received:
@@ -276,7 +298,7 @@ class ReceptionStatusAwaiter:
                 f"ReceptionStatus for message_subject_id {mid} has already been received!"
             )
 
-        self.received[mid] = reception_status
+        self.received[mid] = (reception_status, time.monotonic())
 
         awaiting = self.awaiting.get(mid)
         if awaiting is not None:
@@ -352,8 +374,13 @@ class S2ResourceManagerItem(S2ServerItem):
         self._main_task = None
 
     async def _create_connection(self, client_id: str, keep_alive_interval: int):
+        self.reception_status_awaiter.reset()
         await super()._create_connection(client_id, keep_alive_interval)
         self._main_task = self._runningloop.create_task(self._connect_and_run())
+
+    async def _destroy_connection(self, reason: str = "client disconnected"):
+        self.reception_status_awaiter.reset()
+        await super()._destroy_connection(reason)
 
     async def _connect_and_run(self) -> None:
         self._received_messages = asyncio.Queue()
