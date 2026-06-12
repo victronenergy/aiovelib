@@ -26,10 +26,12 @@ class Item(ServiceInterface):
 		self.text = text
 		self.service = None
 
-		if value and hasattr(self, 'valuetype'):
-			self.value = self.valuetype(value)
-		else:
-			self.value = value
+		self.value = self._coerce_value(value)
+
+	def _coerce_value(self, v):
+		if v is None or not hasattr(self, 'valuetype'):
+			return v
+		return self.valuetype(v)
 
 	def __str__(self):
 		if self.text:
@@ -68,8 +70,9 @@ class Item(ServiceInterface):
 
 	def set_value(self, v):
 		try:
+			v = self._coerce_value(v)
 			change = self._set_value(v)
-		except ValueError:
+		except (ValueError, TypeError):
 			return 1
 
 		if change is not None:
@@ -104,7 +107,7 @@ class Item(ServiceInterface):
 	def set_local_value(self, v):
 		""" Set a single local item value, and immediately send ItemsChanged.
 		    Shortcut for using a with statement to send just one item. """
-		change = self._set_local_value(v)
+		change = self._set_local_value(self._coerce_value(v))
 		if change is not None:
 			self.service.send_items_changed({
 				self.path: change
