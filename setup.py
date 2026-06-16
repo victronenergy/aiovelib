@@ -14,6 +14,6 @@ setup(
 	license='MIT',
 	packages = ["aiovelib"],
 	install_requires=[
-		'dbus-next',
+		'dbus-fast',
 	],
 )
