@@ -16,4 +16,7 @@ setup(
 	install_requires=[
 		'dbus-fast',
 	],
+	extras_require={
+		's2': ['s2-python'],
+	},
 )
