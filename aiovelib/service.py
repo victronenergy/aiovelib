@@ -186,20 +186,23 @@ class ItemChangeCollector(object):
 		if self.changes:
 			self.service.send_items_changed(self.changes)
 
-class Service(object):
+class AbstractService(object):
+	""" Bus-agnostic core of the provider service. Holds the item
+	    bookkeeping, the batch-update context manager and the accessor
+	    logic that does not touch the bus, so it can be shared by the real
+	    Service and by test doubles. Subclasses add the bus operations
+	    (export/unexport, name registration and emitting ItemsChanged). """
 
 	_closed = False
 
-	def __init__(self, bus, name):
-		self.bus = bus
+	def __init__(self, name):
 		self.name = name
 		self.objects = {}
 		self.changecollectors = []
 		self.interface = RootItemInterface(self)
-		bus.export('/', self.interface)
 
 	async def register(self):
-		await self.bus.request_name(self.name)
+		pass
 
 	async def close(self):
 		if self._closed:
@@ -207,10 +210,7 @@ class Service(object):
 		self._closed = True
 
 		while self.objects:
-			path, ob = self.objects.popitem()
-			self.bus.unexport(path)
-		self.bus.unexport("/")
-		await self.bus.release_name(self.name)
+			self.objects.popitem()
 
 	def __enter__(self):
 		l = ItemChangeCollector(self)
@@ -241,16 +241,47 @@ class Service(object):
 			)
 
 	def add_item(self, item):
-		self.bus.export(item.path, item)
 		self.objects[item.path] = item
 		item.service = self
 
 	def remove_item(self, path):
 		del self.objects[path]
-		self.bus.unexport(path)
 
 	def get_item(self, path):
 		return self.objects.get(path, None)
+
+	def send_items_changed(self, changes):
+		# No-op in the base; the real Service emits the D-Bus signal.
+		pass
+
+class Service(AbstractService):
+
+	def __init__(self, bus, name):
+		super().__init__(name)
+		self.bus = bus
+		bus.export('/', self.interface)
+
+	async def register(self):
+		await self.bus.request_name(self.name)
+
+	async def close(self):
+		if self._closed:
+			return
+		self._closed = True
+
+		while self.objects:
+			path, ob = self.objects.popitem()
+			self.bus.unexport(path)
+		self.bus.unexport("/")
+		await self.bus.release_name(self.name)
+
+	def add_item(self, item):
+		super().add_item(item)
+		self.bus.export(item.path, item)
+
+	def remove_item(self, path):
+		super().remove_item(path)
+		self.bus.unexport(path)
 
 	def send_items_changed(self, changes):
 		# Send the signal ourselves, so we can set NO_REPLY_EXPECTED.
