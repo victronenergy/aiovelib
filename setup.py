@@ -12,11 +12,12 @@ setup(
 	author_email='iburger@victronenergy.com',
 	url='https://github.com/victronenergy/aiovelib',
 	license='MIT',
-	packages = ["aiovelib"],
+	packages = ["aiovelib", "aiovelib.test"],
 	install_requires=[
 		'dbus-fast',
 	],
 	extras_require={
 		's2': ['s2-python'],
+		'test': ['pytest', 'pytest-asyncio'],
 	},
 )
