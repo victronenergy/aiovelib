@@ -19,32 +19,42 @@ class Setting(dict):
 			self["silent"] = make_variant(1)
 		self.alias = alias
 
-class SettingsService(Service):
+class AbstractSettingsService(Service):
+	""" Bus-agnostic core of the settings client. Holds the alias and value
+	    bookkeeping that does not touch the bus, so it can be shared by the
+	    real SettingsService and by an in-memory test double. Subclasses
+	    implement add_settings (the bus call lives there). """
 	servicetype = SETTINGS_SERVICE
 	paths = set() # Empty set
 	aliases = {}
 
-	async def add_settings(self, *settings):
-		# Update the alaises
+	def _register_aliases(self, settings):
 		self.aliases.update((s.alias, s["path"].value) for s in settings)
+
+	def _apply_setting(self, path, value):
+		# Store the current value locally, so we avoid an additional GetValue.
+		self.paths.add(path)
+		self.values[path].update(value)
+
+	def alias(self, a):
+		return self.aliases.get(a)
+
+class SettingsService(AbstractSettingsService):
+	async def add_settings(self, *settings):
+		# Update the aliases
+		self._register_aliases(settings)
 
 		# add settings
 		reply = await self.monitor.dbus_call(SETTINGS_SERVICE, "/",
 			"AddSettings", "aa{sv}", list(settings),
 			interface=SETTINGS_INTERFACE)
 
-		# process results, store current values. This avoids an additional
-		# call to GetValue.
+		# process results, store current values.
 		for result in reply[0]:
-			path = result["path"].value
 			if result["error"].value == 0:
-				self.paths.add(path)
-				self.values[path].update(result["value"].value)
+				self._apply_setting(result["path"].value, result["value"].value)
 			else:
-				raise SettingException(path)
-
-	def alias(self, a):
-		return self.aliases.get(a)
+				raise SettingException(result["path"].value)
 
 if __name__ == "__main__":
 	import asyncio
