@@ -4,7 +4,8 @@
 import asyncio
 
 from aiovelib.service import (
-	IntegerItem, DoubleItem, TextItem, TextArrayItem)
+	IntegerItem, DoubleItem, TextItem, TextArrayItem,
+	UInt16Item, UInt32Item, UInt64Item, Variant)
 from aiovelib.test.service import MockService
 
 GRID = "com.victronenergy.grid.test"
@@ -77,6 +78,89 @@ async def test_set_value_coercion_failure_returns_one():
 
 	assert item.set_value("not a number") == 1
 	assert service["/Int"] == 0
+
+
+async def check_rejected_integer_write(item_type, invalid):
+	async with make_service() as service:
+		item = item_type("/Int", 10, writeable=True)
+		service.add_item(item)
+
+		# Call the D-Bus method bodies without a running bus.
+		assert item.SetValue.__wrapped__(item, Variant("i", 20)) == 0
+		assert item.SetValue.__wrapped__(item, Variant("s", str(invalid))) == 1
+
+		value = item.GetValue.__wrapped__(item)
+		assert value.signature == item.coding
+		assert value.value == 20
+
+		items = service.interface.GetItems.__wrapped__(service.interface)
+		assert items["/Int"]["Value"] == value
+
+
+async def test_integer_rejects_below_minimum():
+	await check_rejected_integer_write(IntegerItem, -(2**31) - 1)
+
+
+async def test_integer_rejects_above_maximum():
+	await check_rejected_integer_write(IntegerItem, 2**31)
+
+
+async def test_uint16_rejects_negative():
+	await check_rejected_integer_write(UInt16Item, -1)
+
+
+async def test_uint16_rejects_above_maximum():
+	await check_rejected_integer_write(UInt16Item, 2**16)
+
+
+async def test_uint32_rejects_negative():
+	await check_rejected_integer_write(UInt32Item, -1)
+
+
+async def test_uint32_rejects_above_maximum():
+	await check_rejected_integer_write(UInt32Item, 2**32)
+
+
+async def test_uint64_rejects_negative():
+	await check_rejected_integer_write(UInt64Item, -1)
+
+
+async def test_uint64_rejects_above_maximum():
+	await check_rejected_integer_write(UInt64Item, 2**64)
+
+
+async def test_integer_boundaries_and_none():
+	async with make_service() as service:
+		for item_type, minimum, maximum in [
+			(IntegerItem, -(2**31), 2**31 - 1),
+			(UInt16Item, 0, 2**16 - 1),
+			(UInt32Item, 0, 2**32 - 1),
+			(UInt64Item, 0, 2**64 - 1),
+		]:
+			item = item_type("/Int", minimum)
+			service.add_item(item)
+			assert item.get_value().value == minimum
+			assert item.set_value(maximum) == 0
+			assert item.get_value().value == maximum
+			assert item.set_value(None) == 0
+			assert item.get_value() == Variant("ai", [])
+
+
+async def test_invalid_integer_does_not_call_onchange_or_emit_signal():
+	calls = []
+
+	def onchange(value):
+		calls.append(value)
+		return True
+
+	async with make_service() as service:
+		service.send_items_changed = calls.append
+		item = UInt16Item("/Int", 20, onchange=onchange)
+		service.add_item(item)
+
+		assert item.set_value(70000) == 1
+		assert item.get_value().value == 20
+		assert calls == []
 
 
 async def test_sync_onchange_accept_and_reject():

@@ -31,7 +31,9 @@ class Item(ServiceInterface):
 	def _coerce_value(self, v):
 		if v is None or not hasattr(self, 'valuetype'):
 			return v
-		return self.valuetype(v)
+		v = self.valuetype(v)
+		Variant(self.coding, v)
+		return v
 
 	def __str__(self):
 		if self.text:
@@ -137,6 +139,18 @@ class DoubleArrayItem(Item):
 	coding = 'ad'
 	valuetype = list
 
+class UInt16Item(Item):
+    coding = 'q'
+    valuetype = int
+
+class UInt32Item(Item):
+    coding = 'u'
+    valuetype = int
+
+class UInt64Item(Item):
+    coding = 't'
+    valuetype = int
+
 class RootItemInterface(ServiceInterface):
 	def __init__(self, service):
 		super().__init__(IFACE)
@@ -178,7 +192,7 @@ class ItemChangeCollector(object):
 
 	def __setitem__(self, path, value):
 		ob = self.service.objects[path]
-		change = ob._set_local_value(None if value is None else ob.valuetype(value))
+		change = ob._set_local_value(ob._coerce_value(value))
 		if change is not None:
 			self.changes[path] = change
 
