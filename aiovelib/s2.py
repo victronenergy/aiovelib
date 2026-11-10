@@ -1,12 +1,10 @@
 import time
 import math
-import json
-import uuid
 import logging
 import asyncio
 from enum import Enum
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional, Dict, List, Awaitable, Tuple
+from typing import AsyncGenerator, AsyncIterator, List, Optional
 
 try:
     import dbus_fast
@@ -15,23 +13,53 @@ except ImportError:
 else:
     from dbus_fast.service import method, signal
 
-from s2python.common import (
-    ReceptionStatusValues,
-    ReceptionStatus,
-    Handshake,
-    EnergyManagementRole,
-    HandshakeResponse,
-    SelectControlType,
-)
-from s2python.s2_control_type import S2ControlType
-from s2python.s2_parser import S2Parser
-from s2python.s2_validation_error import S2ValidationError
+# Note: only import from module paths that do not require the optional
+# websockets dependency of s2python (available since s2python v0.11.0).
+from s2python.common import EnergyManagementRole, ReceptionStatus
 from s2python.message import S2Message
-from s2python.version import S2_VERSION
-from s2python.s2_asset_details import AssetDetails
-from s2python.s2_message_handlers import MessageHandlers
+from s2python.reception_status_awaiter import ReceptionStatusAwaiter
+from s2python.connection.asset_details import AssetDetails
+from s2python.connection.async_.connection import S2AsyncConnection
+from s2python.connection.async_.medium.s2_medium import (
+    MediumClosedConnectionError,
+    S2AsyncMediumConnection,
+    UnparsedMediumData,
+)
+from s2python.connection.async_.control_type.class_based import (
+    ResourceManagerHandler,
+    S2ControlType,
+    FRBCControlType,
+    PPBCControlType,
+    OMBCControlType,
+    PEBCControlType,
+    DDBCControlType,
+    NoControlControlType,
+)
 
 from aiovelib.service import TextItem
+
+__all__ = [
+    # aiovelib S2-over-D-Bus API
+    "S2ConnEventType",
+    "S2ConnEvent",
+    "S2ServerItem",
+    "S2ResourceManagerItem",
+    "DbusMediumConnection",
+    "DynamicResourceManagerHandler",
+    # re-exported s2python API, so that users of aiovelib.s2 do not need to
+    # track s2python module paths themselves
+    "AssetDetails",
+    "ReceptionStatusAwaiter",
+    "S2AsyncConnection",
+    "ResourceManagerHandler",
+    "S2ControlType",
+    "FRBCControlType",
+    "PPBCControlType",
+    "OMBCControlType",
+    "PEBCControlType",
+    "DDBCControlType",
+    "NoControlControlType",
+]
 
 
 logger = logging.getLogger(__name__)
@@ -232,140 +260,154 @@ class S2ServerItem(TextItem):
         return [client_id if client_id else self.client_id, reason]
 
 
-class ReceptionStatusAwaiter:
-    """"
-    This fixes races and memory leaks compared to the original
-    ReceptionStatusAwaiter provided in s2python v0.8.1.
+
+class DbusMediumConnection(S2AsyncMediumConnection):
     """
-    received: Dict[uuid.UUID, Tuple[ReceptionStatus, float]]
-    awaiting: Dict[uuid.UUID, asyncio.Event]
+    S2 transport medium over the Victron D-Bus S2 interface.
 
-    def __init__(self, received_status_ttl_s: float = 30.0) -> None:
-        self.received = {}
-        self.awaiting = {}
-        self._received_status_ttl_s = max(0.0, float(received_status_ttl_s))
+    Incoming messages are fed by the owning S2ServerItem from the D-Bus
+    `Message` method, outgoing messages are emitted as the D-Bus `Message`
+    signal. One medium instance represents a single CEM connection; it is
+    closed for good when the CEM disconnects.
+    """
 
-    def reset(self) -> None:
-        self.received.clear()
-        self.awaiting.clear()
+    def __init__(self, item: "S2ResourceManagerItem") -> None:
+        self._item = item
+        self._incoming: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        self._closed = False
 
-    def _prune_expired_received(self) -> None:
-        if self._received_status_ttl_s <= 0:
-            return
+    async def is_connected(self) -> bool:
+        return not self._closed and self._item.is_connected
 
-        now = time.monotonic()
-        expired = [
-            mid
-            for mid, (_, ts) in self.received.items()
-            if (now - ts) > self._received_status_ttl_s
-        ]
+    async def messages(self) -> AsyncGenerator[UnparsedMediumData, None]:
+        while True:
+            message = await self._incoming.get()
+            if message is None:  # close sentinel
+                return
+            yield message
 
-        for mid in expired:
-            self.received.pop(mid, None)
-
-    async def wait_for_reception_status(
-        self, message_id: uuid.UUID, timeout_reception_status: float
-    ) -> ReceptionStatus:
-        self._prune_expired_received()
-
-        existing = self.received.pop(message_id, None)
-        if existing is not None:
-            return existing[0]
-
-        received_event = self.awaiting.get(message_id)
-        if received_event is None:
-            received_event = asyncio.Event()
-            self.awaiting[message_id] = received_event
-
-        try:
-            await asyncio.wait_for(received_event.wait(), timeout_reception_status)
-            cached = self.received.pop(message_id)
-            return cached[0]
-        finally:
-            self.awaiting.pop(message_id, None)
-
-    async def receive_reception_status(self, reception_status: ReceptionStatus) -> None:
-        if not isinstance(reception_status, ReceptionStatus):
-            raise RuntimeError(
-                f"Expected a ReceptionStatus but received message {reception_status}"
+    async def send(self, message: str) -> None:
+        if self._closed or not self._item.is_connected:
+            raise MediumClosedConnectionError(
+                "Cannot send messages if client connection is not yet established."
             )
+        self._item._send_message(message)
 
-        self._prune_expired_received()
-        mid = reception_status.subject_message_id
+    def feed(self, message: str) -> None:
+        """Feed an incoming S2 message received over D-Bus."""
+        if not self._closed:
+            self._incoming.put_nowait(message)
 
-        if mid in self.received:
-            raise RuntimeError(
-                f"ReceptionStatus for message_subject_id {mid} has already been received!"
-            )
+    def close(self) -> None:
+        """Close the medium, ending the message generator."""
+        if not self._closed:
+            self._closed = True
+            self._incoming.put_nowait(None)
 
-        self.received[mid] = (reception_status, time.monotonic())
 
-        awaiting = self.awaiting.get(mid)
-        if awaiting is not None:
-            awaiting.set()
-            self.awaiting.pop(mid, None)
+class DynamicResourceManagerHandler(ResourceManagerHandler):
+    """
+    The upstream ResourceManagerHandler fixes its control types and asset
+    details at construction time. This variant reads them live from the
+    owning S2ResourceManagerItem on every use, so they can be updated at
+    runtime (see S2ResourceManagerItem.send_resource_manager_details).
+    """
+
+    # pylint: disable=super-init-not-called
+    def __init__(self, item: "S2ResourceManagerItem") -> None:
+        self._item = item
+        self._current_control_type: Optional[S2ControlType] = None
+
+    @property
+    def asset_details(self) -> Optional[AssetDetails]:
+        return self._item.asset_details
+
+    @property
+    def _control_types(self) -> List[S2ControlType]:
+        return list(self._item.control_types or [])
+
+    @property
+    def current_control_type(self) -> Optional[S2ControlType]:
+        return self._current_control_type
 
 
 class S2ResourceManagerItem(S2ServerItem):
+    """
+    S2 resource manager exposed over D-Bus.
 
-    _received_messages: asyncio.Queue
-    _restart_connection_event: asyncio.Event
+    The S2 protocol state (handshake, reception statuses, control type
+    selection and message dispatch) is handled by s2python's
+    S2AsyncConnection; this item provides the D-Bus medium for it and the
+    service-facing API. A fresh S2AsyncConnection is created for every CEM
+    connection.
+    """
 
-    reception_status_awaiter: ReceptionStatusAwaiter
-    s2_parser: S2Parser
-    control_types: List[S2ControlType]
     role: EnergyManagementRole
-    asset_details: AssetDetails
-
-    _handlers: MessageHandlers
-    _current_control_type: S2ControlType | None
+    control_types: Optional[List[S2ControlType]]
+    asset_details: Optional[AssetDetails]
 
     def __init__(self, path,
-                 control_types: List[S2ControlType] | None = None,
-                 asset_details: AssetDetails | None = None):
+                 control_types: Optional[List[S2ControlType]] = None,
+                 asset_details: Optional[AssetDetails] = None):
         super().__init__(path)
 
         self.role = EnergyManagementRole.RM
-        self.reception_status_awaiter = ReceptionStatusAwaiter()
-        self.s2_parser = S2Parser()
-        self._handlers = MessageHandlers()
-        self._current_control_type = None
-
         self.control_types = control_types
         self.asset_details = asset_details
+        self._apply_asset_details()
 
-        self._main_task: asyncio.Task | None = None
+        self._connection: Optional[S2AsyncConnection] = None
+        self._medium: Optional[DbusMediumConnection] = None
+        self._rm_handler: Optional[DynamicResourceManagerHandler] = None
+        self._main_task: Optional[asyncio.Task] = None
 
-        self._handlers.register_handler(SelectControlType, self.handle_select_control_type_as_rm)
-        self._handlers.register_handler(Handshake, self.handle_handshake)
-        self._handlers.register_handler(HandshakeResponse, self.handle_handshake_response_as_rm)
+        # Setting this event tears the current S2 connection down and returns
+        # the item to the ready state, so the CEM can connect again.
+        self._restart_connection_event = asyncio.Event()
 
-    async def set_ready(self, ready: bool, control_types: List[S2ControlType] | None = None, asset_details: AssetDetails | None = None):
+    @property
+    def connection(self) -> Optional[S2AsyncConnection]:
+        """The S2 protocol connection of the currently connected CEM, if any."""
+        return self._connection
+
+    @property
+    def current_control_type(self) -> Optional[S2ControlType]:
+        handler = self._rm_handler
+        return handler.current_control_type if handler else None
+
+    def _apply_asset_details(self) -> None:
+        if self.asset_details is None:
+            return
+        for control_type in self.control_types or []:
+            control_type.set_asset_details(self.asset_details)
+
+    async def set_ready(self, ready: bool,
+                        control_types: Optional[List[S2ControlType]] = None,
+                        asset_details: Optional[AssetDetails] = None):
         if control_types is not None:
             self.control_types = control_types
         if asset_details is not None:
             self.asset_details = asset_details
+        self._apply_asset_details()
         await super().set_ready(ready)
 
     async def close(self) -> None:
-        # Set not ready and destroy existing connection
+        # Set not ready and destroy an existing connection
         await self.set_ready(False)
+        self._restart_connection_event.set()
 
-        # Try to unwind the internal logic to unwind if possible,
-        # guarded in case it does not exist yet
-        if hasattr(self, "_restart_connection_event") \
-                and self._restart_connection_event:
-            self._restart_connection_event.set()
-        if hasattr(self, "_s2_dbus_disconnect_event") \
-                and self._s2_dbus_disconnect_event:
-            self._s2_dbus_disconnect_event.set()
-
-        # Cancel the main task with its children
+        # The main task unwinds on its own once the connection is destroyed;
+        # cancellation is only a fallback.
         task = self._main_task
         if task is not None and not task.done():
-            task.cancel()
             try:
-                await task
+                await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            except asyncio.TimeoutError:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             except asyncio.CancelledError:
                 pass
             except Exception:
@@ -374,232 +416,71 @@ class S2ResourceManagerItem(S2ServerItem):
         self._main_task = None
 
     async def _create_connection(self, client_id: str, keep_alive_interval: int):
-        self.reception_status_awaiter.reset()
         await super()._create_connection(client_id, keep_alive_interval)
-        self._main_task = self._runningloop.create_task(self._connect_and_run())
+
+        self._restart_connection_event = asyncio.Event()
+        self._medium = DbusMediumConnection(self)
+        self._connection = S2AsyncConnection(
+            medium=self._medium, eventloop=self._runningloop)
+        self._rm_handler = DynamicResourceManagerHandler(self)
+        self._rm_handler.register_handlers(self._connection)
+        self._main_task = self._runningloop.create_task(self._run_connection())
 
     async def _destroy_connection(self, reason: str = "client disconnected"):
-        self.reception_status_awaiter.reset()
+        connection = self._connection
+        medium = self._medium
+        if connection is not None:
+            await connection.stop()
+        if medium is not None:
+            medium.close()
         await super()._destroy_connection(reason)
 
-    async def _connect_and_run(self) -> None:
-        self._received_messages = asyncio.Queue()
-        self._restart_connection_event = asyncio.Event()
+    async def _run_connection(self) -> None:
+        connection = self._connection
+        medium = self._medium
+        restart_event = self._restart_connection_event
 
-        logger.debug("Connecting as S2 resource manager.")
+        logger.debug("Connecting as S2 resource manager over D-Bus")
 
-        async def wait_till_disconnect() -> None:
-            await self._s2_dbus_disconnect_event.wait()
+        run_task = self._runningloop.create_task(connection.run())
+        restart_task = self._runningloop.create_task(restart_event.wait())
+        try:
+            await asyncio.wait(
+                (run_task, restart_task), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            await connection.stop()
+            medium.close()
+            restart_task.cancel()
+            for task in (run_task, restart_task):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("S2 connection terminated with an error")
 
-        async def wait_till_connection_restart() -> None:
-            await self._restart_connection_event.wait()
+            if self._connection is connection:
+                self._connection = None
+                self._medium = None
+                self._rm_handler = None
 
-        background_tasks = [
-            self._runningloop.create_task(wait_till_disconnect()),
-            self._runningloop.create_task(self._connect_as_rm()),
-            self._runningloop.create_task(wait_till_connection_restart()),
-        ]
-
-        (done, pending) = await asyncio.wait(
-            background_tasks, return_when=asyncio.FIRST_COMPLETED
-        )
-        if self._current_control_type:
-            if asyncio.iscoroutinefunction(self._current_control_type.deactivate):
-                await self._current_control_type.deactivate(self)
-            else:
-                await self._runningloop.run_in_executor(
-                    None, self._current_control_type.deactivate, self
-                )
-            self._current_control_type = None
-
-        for task in done:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.exception(f"S2: {e}")
-
-        for task in pending:
-            try:
-                task.cancel()
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        await self._destroy_connection("service shutdown")
-        logger.debug("Finished S2 connection eventloop.")
+            await self._destroy_connection("connection stopped")
+            logger.debug("Finished S2 connection eventloop.")
 
     async def _on_s2_message(self, message):
-        try:
-            s2_msg: S2Message = self.s2_parser.parse_as_any_message(message)
-        except json.JSONDecodeError:
-            await self._send_and_forget(
-                ReceptionStatus(
-                    subject_message_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
-                    status=ReceptionStatusValues.INVALID_DATA,
-                    diagnostic_label="Not valid json.",
-                )
-            )
-        except S2ValidationError as e:
-            json_msg = json.loads(message)
-            message_id = json_msg.get("message_id")
-            if message_id:
-                await self._respond_with_reception_status(
-                    subject_message_id=message_id,
-                    status=ReceptionStatusValues.INVALID_MESSAGE,
-                    diagnostic_label=str(e),
-                )
-            else:
-                await self._respond_with_reception_status(
-                    subject_message_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
-                    status=ReceptionStatusValues.INVALID_DATA,
-                    diagnostic_label="Message appears valid json but could not find a message_id field.",
-                )
-        else:
-            logger.debug("Received message %s", s2_msg.to_json())
-
-            if isinstance(s2_msg, ReceptionStatus):
-                logger.debug(
-                    "Message is a reception status for %s so registering in cache.",
-                    s2_msg.subject_message_id,
-                )
-                await self.reception_status_awaiter.receive_reception_status(s2_msg)
-            else:
-                await self._received_messages.put(s2_msg)
-
-    async def _connect_as_rm(self) -> None:
-        await self.send_msg_and_await_reception_status(
-            Handshake(
-                message_id=uuid.uuid4(),
-                role=self.role,
-                supported_protocol_versions=[S2_VERSION],
-            )
-        )
-        logger.debug(
-            "Send handshake to CEM, expecting Handshake and HandshakeResponse."
-        )
-
-        await self._handle_received_messages()
-
-    async def handle_handshake(
-        self, _: "S2ResourceManagerItem", message: S2Message, send_okay: Awaitable[None]
-    ) -> None:
-        if not isinstance(message, Handshake):
-            logger.error(
-                "Handler for Handshake received a message of the wrong type: %s",
-                type(message),
-            )
+        medium = self._medium
+        if medium is None:
+            logger.warning("Received S2 message without an active connection, ignoring")
             return
+        medium.feed(message)
 
-        logger.debug(
-            "%s supports S2 protocol versions: %s",
-            message.role,
-            message.supported_protocol_versions,
-        )
-        await send_okay
-
-    async def handle_handshake_response_as_rm(
-        self, _: "S2ResourceManagerItem", message: S2Message, send_okay: Awaitable[None]
-    ) -> None:
-        if not isinstance(message, HandshakeResponse):
-            logger.error(
-                "Handler for HandshakeResponse received a message of the wrong type: %s",
-                type(message),
-            )
-            return
-
-        logger.debug("Received HandshakeResponse %s", message.to_json())
-
-        logger.debug(
-            "CEM selected to use version %s", message.selected_protocol_version
-        )
-        await send_okay
-        logger.debug("Handshake complete. Sending first ResourceManagerDetails.")
-
-        await self.send_resource_manager_details()
-
-    async def handle_select_control_type_as_rm(
-        self, _: "S2ResourceManagerItem", message: S2Message, send_okay: Awaitable[None]
-    ) -> None:
-        if not isinstance(message, SelectControlType):
-            logger.error(
-                "Handler for SelectControlType received a message of the wrong type: %s",
-                type(message),
-            )
-            return
-
-        await send_okay
-
-        logger.debug(
-            "CEM selected control type %s. Activating control type.",
-            message.control_type,
-        )
-
-        control_types_by_protocol_name = {
-            c.get_protocol_control_type(): c for c in self.control_types
-        }
-        selected_control_type: S2ControlType | None = (
-            control_types_by_protocol_name.get(message.control_type)
-        )
-
-        if self._current_control_type is not None:
-            if asyncio.iscoroutinefunction(self._current_control_type.deactivate):
-                await self._current_control_type.deactivate(self)
-            else:
-                await self._runningloop.run_in_executor(
-                    None, self._current_control_type.deactivate, self
-                )
-
-        self._current_control_type = selected_control_type
-
-        if self._current_control_type is not None:
-            if asyncio.iscoroutinefunction(self._current_control_type.activate):
-                await self._current_control_type.activate(self)
-            else:
-                await self._runningloop.run_in_executor(
-                    None, self._current_control_type.activate, self
-                )
-            self._current_control_type.register_handlers(self._handlers)
-
-    async def _send_and_forget(self, s2_msg: S2Message) -> None:
-        if not self.is_connected:
+    def _require_connection(self) -> S2AsyncConnection:
+        connection = self._connection
+        if connection is None or not self.is_connected:
             raise RuntimeError(
                 "Cannot send messages if client connection is not yet established."
             )
-
-        json_msg = s2_msg.to_json()
-        logger.debug("Sending message %s", json_msg)
-
-        try:
-            self._send_message(json_msg)
-        except Exception as e:
-            logger.exception("Unable to send message %s due to %s", s2_msg, str(e))
-            self._restart_connection_event.set()
-
-    async def _respond_with_reception_status(
-        self, subject_message_id: uuid.UUID, status: ReceptionStatusValues, diagnostic_label: str
-    ) -> None:
-        logger.debug(
-            "Responding to message %s with status %s", subject_message_id, status
-        )
-        await self._send_and_forget(
-            ReceptionStatus(
-                subject_message_id=subject_message_id,
-                status=status,
-                diagnostic_label=diagnostic_label,
-            )
-        )
-
-    def _respond_with_reception_status_sync(
-        self, subject_message_id: uuid.UUID, status: ReceptionStatusValues, diagnostic_label: str
-    ) -> None:
-        asyncio.run_coroutine_threadsafe(
-            self._respond_with_reception_status(
-                subject_message_id, status, diagnostic_label
-            ),
-            self._runningloop,
-        ).result()
+        return connection
 
     async def send_msg_and_await_reception_status(
         self,
@@ -607,30 +488,9 @@ class S2ResourceManagerItem(S2ServerItem):
         timeout_reception_status: float = 5.0,
         raise_on_error: bool = True,
     ) -> ReceptionStatus:
-        await self._send_and_forget(s2_msg)
-        logger.debug(
-            "Waiting for ReceptionStatus for %s %s seconds",
-            s2_msg.message_id,  # type: ignore[attr-defined, union-attr]
-            timeout_reception_status,
+        return await self._require_connection().send_msg_and_await_reception_status(
+            s2_msg, timeout_reception_status, raise_on_error
         )
-        try:
-            reception_status = await self.reception_status_awaiter.wait_for_reception_status(
-                s2_msg.message_id, timeout_reception_status  # type: ignore[attr-defined, union-attr]
-            )
-        except TimeoutError:
-            logger.error(
-                "Did not receive a reception status on time for %s",
-                s2_msg.message_id,  # type: ignore[attr-defined, union-attr]
-            )
-            self._restart_connection_event.set()
-            raise
-
-        if reception_status.status != ReceptionStatusValues.OK and raise_on_error:
-            raise RuntimeError(
-                f"ReceptionStatus was not OK but rather {reception_status.status} ({reception_status.diagnostic_label})"
-            )
-
-        return reception_status
 
     def send_msg_and_await_reception_status_sync(
         self,
@@ -645,35 +505,27 @@ class S2ResourceManagerItem(S2ServerItem):
             self._runningloop,
         ).result()
 
-    async def send_msg_and_forget(
-        self,
-        s2_msg: S2Message,
-    ) -> None:
-        await self._send_and_forget(s2_msg)
-
-    async def _handle_received_messages(self) -> None:
-        while True:
-            msg = await self._received_messages.get()
-            await self._handlers.handle_message(self, msg)
+    async def send_msg_and_forget(self, s2_msg: S2Message) -> None:
+        await self._require_connection().send_and_forget(s2_msg)
 
     async def send_resource_manager_details(
         self,
-        control_types: List[S2ControlType] = None,
-        asset_details: AssetDetails = None
+        control_types: Optional[List[S2ControlType]] = None,
+        asset_details: Optional[AssetDetails] = None
     ) -> ReceptionStatus:
         if control_types is not None:
             self.control_types = control_types
         if asset_details is not None:
             self.asset_details = asset_details
-        reception_status: ReceptionStatus = await self.send_msg_and_await_reception_status(
+        self._apply_asset_details()
+        return await self.send_msg_and_await_reception_status(
             self.asset_details.to_resource_manager_details(self.control_types)
         )
-        return reception_status
 
     def send_resource_manager_details_sync(
         self,
-        control_types: List[S2ControlType] = None,
-        asset_details: AssetDetails = None
+        control_types: Optional[List[S2ControlType]] = None,
+        asset_details: Optional[AssetDetails] = None
     ) -> ReceptionStatus:
         return asyncio.run_coroutine_threadsafe(
             self.send_resource_manager_details(
